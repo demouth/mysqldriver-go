@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	db2, err := sql.Open("mysqldriver", "gorm:gorm@tcp(localhost:9910)/gorm?charset=utf8&parseTime=True&loc=Local")
+	db2, err := sql.Open("mysqldriver", "user:password@tcp(localhost:9910)/test?charset=utf8&parseTime=True&loc=Local")
 	if err != nil {
 		panic(err.Error())
 	}
@@ -16,7 +16,7 @@ func main() {
 	println("Ping", db2.Ping())
 
 	/*
-		db, err := sql.Open("mysql", "gorm:gorm@tcp(localhost:9910)/gorm?charset=utf8&parseTime=True&loc=Local")
+		db, err := sql.Open("mysql", "user:password@tcp(localhost:9910)/test?charset=utf8&parseTime=True&loc=Local")
 		if err != nil {
 			panic(err.Error())
 		}

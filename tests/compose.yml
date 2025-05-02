@@ -1,12 +1,22 @@
 version: '3'
 
 services:
-  mysql:
+  mysql1:
     image: 'mysql/mysql-server:latest'
     ports:
       - "9910:3306"
     environment:
-      - MYSQL_DATABASE=gorm
-      - MYSQL_USER=gorm
-      - MYSQL_PASSWORD=gorm
+      - MYSQL_DATABASE=test
+      - MYSQL_USER=user
+      - MYSQL_PASSWORD=password
+      - MYSQL_RANDOM_ROOT_PASSWORD="yes"
+
+  mysql2:
+    image: 'mysql/mysql-server:latest'
+    ports:
+      - "9911:3306"
+    environment:
+      - MYSQL_DATABASE=test
+      - MYSQL_USER=user
+      - MYSQL_PASSWORD=password
       - MYSQL_RANDOM_ROOT_PASSWORD="yes"
