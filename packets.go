@@ -263,3 +263,18 @@ func (mc *okHandler) handleOkPacket(data []byte) error {
 func readStatus(b []byte) statusFlag {
 	return statusFlag(b[0]) | statusFlag(b[1])<<8
 }
+
+func (mc *mysqlConn) clearResult() *okHandler {
+	mc.result = mysqlResult{}
+	return (*okHandler)(mc)
+}
+
+func (mc *mysqlConn) writeCommandPacket(command byte) error {
+	mc.resetSequence()
+	data, err := mc.buf.takeSmallBuffer(4 + 1)
+	if err != nil {
+		return err
+	}
+	data[4] = command
+	return mc.writePacket(data)
+}
