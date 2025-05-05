@@ -1,6 +1,7 @@
 package mysqldriver
 
 import (
+	"crypto/rsa"
 	"errors"
 	"fmt"
 	"net/url"
@@ -19,6 +20,7 @@ type Config struct {
 
 	ParseTime bool
 
+	pubKey   *rsa.PublicKey
 	charsets []string
 }
 

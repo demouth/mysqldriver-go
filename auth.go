@@ -1,8 +1,14 @@
 package mysqldriver
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha1"
 	"crypto/sha256"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
+	"fmt"
 )
 
 func (mc *mysqlConn) auth(authData []byte, plugin string) ([]byte, error) {
@@ -47,6 +53,25 @@ func scrambleSHA256Password(scramble []byte, password string) []byte {
 	return message1
 }
 
+func encryptPassword(password string, seed []byte, pub *rsa.PublicKey) ([]byte, error) {
+	plain := make([]byte, len(password)+1)
+	copy(plain, password)
+	for i := range plain {
+		j := i % len(seed)
+		plain[i] ^= seed[j]
+	}
+	sha1 := sha1.New()
+	return rsa.EncryptOAEP(sha1, rand.Reader, pub, plain, nil)
+}
+
+func (mc *mysqlConn) sendEncryptedPassword(seed []byte, pub *rsa.PublicKey) error {
+	enc, err := encryptPassword(mc.cfg.Passwd, seed, pub)
+	if err != nil {
+		return err
+	}
+	return mc.writeAuthSwitchPacket(enc)
+}
+
 func (mc *mysqlConn) handleAuthResult(oldAuthData []byte, plugin string) error {
 	authData, newPlugin, err := mc.readAuthResult()
 	if err != nil {
@@ -67,6 +92,40 @@ func (mc *mysqlConn) handleAuthResult(oldAuthData []byte, plugin string) error {
 				if err = mc.resultUnchanged().readResultOK(); err == nil {
 					return nil // auth successful
 				}
+			case cachingSha2PasswordPerformFullAuthentication:
+				pubKey := mc.cfg.pubKey
+				if pubKey == nil {
+					data, err := mc.buf.takeSmallBuffer(4 + 1)
+					if err != nil {
+						return err
+					}
+					data[4] = cachingSha2PasswordRequestPublicKey
+					err = mc.writePacket(data)
+					if err != nil {
+						return err
+					}
+					if data, err = mc.readPacket(); err != nil {
+						return err
+					}
+					if data[0] != iAuthMoreData {
+						return fmt.Errorf("unexpected resp from server for caching_sha2_password, perform full authentication")
+					}
+
+					block, rest := pem.Decode(data[1:])
+					if block == nil {
+						return fmt.Errorf("no pem data found, data: %s", rest)
+					}
+					pkix, err := x509.ParsePKIXPublicKey(block.Bytes)
+					if err != nil {
+						return err
+					}
+					pubKey = pkix.(*rsa.PublicKey)
+				}
+				err = mc.sendEncryptedPassword(oldAuthData, pubKey)
+				if err != nil {
+					return err
+				}
+				return mc.resultUnchanged().readResultOK()
 			default:
 				return errors.New("malformed packet")
 			}

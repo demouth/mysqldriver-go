@@ -16,7 +16,7 @@ func main() {
 		panic(err.Error())
 	}
 	defer db2.Close()
-	fmt.Println("Ping", db2.Ping())
+	fmt.Println("mysqldriver: Ping", db2.Ping())
 	// r, e := db2.Exec("SHOW DATABASES")
 	// fmt.Printf("SHOW DATABASES: %#v, %v\n", r, e)
 
@@ -28,7 +28,7 @@ func main() {
 	}
 	defer db.Close()
 
-	fmt.Println("Ping", db.Ping())
+	fmt.Println("mysql: Ping", db.Ping())
 	rows, err := db.Query("SHOW DATABASES")
 	if err != nil {
 		panic(err.Error())
@@ -39,6 +39,6 @@ func main() {
 		if err := rows.Scan(&database); err != nil {
 			panic(err.Error())
 		}
-		fmt.Println(database)
+		fmt.Println("mysql:", database)
 	}
 }

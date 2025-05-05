@@ -209,6 +209,17 @@ func (mc *mysqlConn) writePacket(data []byte) error {
 	}
 }
 
+// https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_connection_phase_packets_protocol_auth_switch_response.html
+func (mc *mysqlConn) writeAuthSwitchPacket(authData []byte) error {
+	pktLen := 4 + len(authData)
+	data, err := mc.buf.takeBuffer(pktLen)
+	if err != nil {
+		return err
+	}
+	copy(data[4:], authData)
+	return mc.writePacket(data)
+}
+
 func (mc *mysqlConn) resultUnchanged() *okHandler {
 	return (*okHandler)(mc)
 }

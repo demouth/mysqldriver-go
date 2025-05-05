@@ -57,5 +57,7 @@ const (
 type statusFlag uint16
 
 const (
-	cachingSha2PasswordFastAuthSuccess = 3
+	cachingSha2PasswordRequestPublicKey          = 2
+	cachingSha2PasswordFastAuthSuccess           = 3
+	cachingSha2PasswordPerformFullAuthentication = 4
 )
