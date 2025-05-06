@@ -1,6 +1,10 @@
 package mysqldriver
 
-import "encoding/binary"
+import (
+	"database/sql/driver"
+	"encoding/binary"
+	"io"
+)
 
 func getUint24(data []byte) int {
 	return int(data[2])<<16 | int(data[1])<<8 | int(data[0])
@@ -72,4 +76,40 @@ func readBool(input string) (value bool, valid bool) {
 
 	// Not a valid bool value
 	return
+}
+
+func namedValueToValue(named []driver.NamedValue) ([]driver.Value, error) {
+	dargs := make([]driver.Value, len(named))
+	// TODO: handle named values
+	return dargs, nil
+}
+func readLengthEncodedString(b []byte) ([]byte, bool, int, error) {
+	// Get length
+	num, isNull, n := readLengthEncodedInteger(b)
+	if num < 1 {
+		return b[n:n], isNull, n, nil
+	}
+
+	n += int(num)
+
+	// Check data length
+	if len(b) >= n {
+		return b[n-int(num) : n : n], false, n, nil
+	}
+	return nil, false, n, io.EOF
+}
+func skipLengthEncodedString(b []byte) (int, error) {
+	// Get length
+	num, _, n := readLengthEncodedInteger(b)
+	if num < 1 {
+		return n, nil
+	}
+
+	n += int(num)
+
+	// Check data length
+	if len(b) >= n {
+		return n, nil
+	}
+	return n, io.EOF
 }

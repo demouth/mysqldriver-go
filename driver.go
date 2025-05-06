@@ -8,6 +8,7 @@ import (
 	"sync"
 )
 
+type Value any
 type MySQLDriver struct{}
 type DialContextFunc func(ctx context.Context, addr string) (net.Conn, error)
 

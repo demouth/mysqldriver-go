@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 )
 
 func (mc *mysqlConn) readHandshakePacket() (data []byte, plugin string, err error) {
@@ -139,6 +140,7 @@ func (mc *mysqlConn) writeHandshakeResponsePacket(authResp []byte, plugin string
 
 	data, err := mc.buf.takeBuffer(pktLen + 4)
 	if err != nil {
+		mc.cleanup()
 		return err
 	}
 
@@ -192,9 +194,11 @@ func (mc *mysqlConn) writePacket(data []byte) error {
 
 		n, err := writeFunc(data[:4+size])
 		if err != nil {
+			mc.cleanup()
 			return err
 		}
 		if n != 4+size {
+			mc.cleanup()
 			return errors.New("short write")
 		}
 
@@ -214,6 +218,7 @@ func (mc *mysqlConn) writeAuthSwitchPacket(authData []byte) error {
 	pktLen := 4 + len(authData)
 	data, err := mc.buf.takeBuffer(pktLen)
 	if err != nil {
+		mc.cleanup()
 		return err
 	}
 	copy(data[4:], authData)
@@ -239,6 +244,25 @@ func (mc *okHandler) readResultOK() error {
 		return mc.handleOkPacket(data)
 	}
 	return errors.New("malformed packet")
+}
+
+func (mc *okHandler) readResultSetHeaderPacket() (int, error) {
+	mc.result.affectedRows = append(mc.result.affectedRows, 0)
+	mc.result.insertIds = append(mc.result.insertIds, 0)
+
+	data, err := mc.conn().readPacket()
+	if err != nil {
+		return 0, err
+	}
+
+	switch data[0] {
+	case iOK:
+		return 0, mc.handleOkPacket(data)
+	}
+
+	// https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_query_response_text_resultset.html
+	num, _, _ := readLengthEncodedInteger(data)
+	return int(num), nil
 }
 
 // http://dev.mysql.com/doc/internals/en/generic-response-packets.html#packet-OK_Packet
@@ -277,4 +301,102 @@ func (mc *mysqlConn) writeCommandPacket(command byte) error {
 	}
 	data[4] = command
 	return mc.writePacket(data)
+}
+
+func (mc *mysqlConn) writeCommandPacketStr(command byte, arg string) error {
+	mc.resetSequence()
+
+	pktLen := 1 + len(arg)
+	data, err := mc.buf.takeBuffer(pktLen + 4)
+	if err != nil {
+		return err
+	}
+	data[4] = command
+	copy(data[5:], arg)
+	err = mc.writePacket(data)
+	mc.syncSequence()
+	return err
+}
+
+// https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_query_response_text_resultset_column_definition.html#sect_protocol_com_query_response_text_resultset_column_definition_41
+func (mc *mysqlConn) readColumns(count int) ([]mysqlField, error) {
+	columns := make([]mysqlField, count)
+	for i := 0; ; i++ {
+		data, err := mc.readPacket()
+		if err != nil {
+			return nil, err
+		}
+
+		if data[0] == iEOF && (len(data) == 5 || len(data) == 1) {
+			if i == count {
+				return columns, nil
+			}
+			return nil, fmt.Errorf("column count mismatch n:%d len:%d", count, len(columns))
+		}
+
+		// Catalog
+		pos, err := skipLengthEncodedString(data)
+		if err != nil {
+			return nil, err
+		}
+
+		// Database
+		n, err := skipLengthEncodedString(data[pos:])
+		if err != nil {
+			return nil, err
+		}
+		pos += n
+
+		// Table
+		n, err = skipLengthEncodedString(data[pos:])
+		if err != nil {
+			return nil, err
+		}
+		pos += n
+
+		// Original table
+		n, err = skipLengthEncodedString(data[pos:])
+		if err != nil {
+			return nil, err
+		}
+		pos += n
+
+		// Name
+		name, _, n, err := readLengthEncodedString(data[pos:])
+		if err != nil {
+			return nil, err
+		}
+		columns[i].name = string(name)
+		pos += n
+
+		// Original name
+		n, err = skipLengthEncodedString(data[pos:])
+		if err != nil {
+			return nil, err
+		}
+		pos += n
+
+		// filter
+		pos++
+
+		// character set
+		columns[i].charSet = data[pos]
+		pos += 2
+
+		// column length
+		columns[i].length = binary.LittleEndian.Uint32(data[pos : pos+4])
+		pos += 4
+
+		// column type
+		columns[i].fieldType = fieldType(data[pos])
+		pos++
+
+		// flags
+		columns[i].flags = fieldFlag(binary.LittleEndian.Uint16(data[pos : pos+2]))
+		pos += 2
+
+		// decimals
+		columns[i].decimals = data[pos]
+		pos += 1
+	}
 }

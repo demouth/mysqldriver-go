@@ -17,8 +17,18 @@ func main() {
 	}
 	defer db2.Close()
 	fmt.Println("mysqldriver: Ping", db2.Ping())
-	// r, e := db2.Exec("SHOW DATABASES")
-	// fmt.Printf("SHOW DATABASES: %#v, %v\n", r, e)
+	rows, err := db2.Query("SHOW DATABASES")
+	if err != nil {
+		panic(err.Error())
+	}
+	defer rows.Close()
+	// for rows.Next() {
+	// 	var database string
+	// 	if err := rows.Scan(&database); err != nil {
+	// 		panic(err.Error())
+	// 	}
+	// 	fmt.Println("mysqldriver:", database)
+	// }
 
 	// using driver: mysql
 
@@ -29,7 +39,7 @@ func main() {
 	defer db.Close()
 
 	fmt.Println("mysql: Ping", db.Ping())
-	rows, err := db.Query("SHOW DATABASES")
+	rows, err = db.Query("SHOW DATABASES")
 	if err != nil {
 		panic(err.Error())
 	}

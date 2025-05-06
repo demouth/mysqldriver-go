@@ -21,6 +21,7 @@ const (
 const (
 	iOK           byte = 0x00
 	iAuthMoreData byte = 0x01
+	iEOF          byte = 0xfe
 )
 
 // https://dev.mysql.com/doc/internals/en/capability-flags.html#packet-Protocol::CapabilityFlags
@@ -92,3 +93,7 @@ const (
 	cachingSha2PasswordFastAuthSuccess           = 3
 	cachingSha2PasswordPerformFullAuthentication = 4
 )
+
+type fieldType byte
+
+type fieldFlag uint16

@@ -48,6 +48,7 @@ func (c *connector) Connect(ctx context.Context) (driver.Conn, error) {
 
 	mc := &mysqlConn{
 		cfg:       c.cfg,
+		closech:   make(chan struct{}),
 		connector: c,
 	}
 
@@ -65,6 +66,7 @@ func (c *connector) Connect(ctx context.Context) (driver.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
+	mc.rawConn = mc.netConn
 
 	// Enable TCP Keepalives on TCP connections
 	if tc, ok := mc.netConn.(*net.TCPConn); ok {
@@ -73,10 +75,18 @@ func (c *connector) Connect(ctx context.Context) (driver.Conn, error) {
 		}
 	}
 
+	mc.startWatcher()
+	if err := mc.watchCancel(ctx); err != nil {
+		mc.cleanup()
+		return nil, err
+	}
+	defer mc.finish()
+
 	mc.buf = newBuffer()
 
 	authData, plugin, err := mc.readHandshakePacket()
 	if err != nil {
+		mc.cleanup()
 		return nil, err
 	}
 
@@ -90,10 +100,12 @@ func (c *connector) Connect(ctx context.Context) (driver.Conn, error) {
 	}
 
 	if err = mc.writeHandshakeResponsePacket(authResp, plugin); err != nil {
+		mc.cleanup()
 		return nil, err
 	}
 
 	if err = mc.handleAuthResult(authData, plugin); err != nil {
+		mc.cleanup()
 		return nil, err
 	}
 
