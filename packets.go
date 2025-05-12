@@ -2,9 +2,11 @@ package mysqldriver
 
 import (
 	"bytes"
+	"database/sql/driver"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 )
 
 func (mc *mysqlConn) readHandshakePacket() (data []byte, plugin string, err error) {
@@ -63,7 +65,14 @@ func (mc *mysqlConn) readPacket() ([]byte, error) {
 	readNext := mc.buf.readNext
 	for {
 		// packet header
-		data, _ := readNext(4, mc.readWithTimeout)
+		data, err := readNext(4, mc.readWithTimeout)
+		if err != nil {
+			mc.close()
+			if cerr := mc.canceled.Value(); cerr != nil {
+				return nil, cerr
+			}
+			return nil, err
+		}
 
 		// packet length
 		pkLen := getUint24(data[:3])
@@ -76,7 +85,14 @@ func (mc *mysqlConn) readPacket() ([]byte, error) {
 		mc.sequence++
 
 		// read packet body
-		data, _ = readNext(pkLen, mc.readWithTimeout)
+		data, err = readNext(pkLen, mc.readWithTimeout)
+		if err != nil {
+			mc.close()
+			if cerr := mc.canceled.Value(); cerr != nil {
+				return nil, cerr
+			}
+			return nil, err
+		}
 
 		// check if the packet is complete
 		if pkLen < maxPacketSize {
@@ -195,6 +211,9 @@ func (mc *mysqlConn) writePacket(data []byte) error {
 		n, err := writeFunc(data[:4+size])
 		if err != nil {
 			mc.cleanup()
+			if cerr := mc.canceled.Value(); cerr != nil {
+				return cerr
+			}
 			return err
 		}
 		if n != 4+size {
@@ -399,4 +418,77 @@ func (mc *mysqlConn) readColumns(count int) ([]mysqlField, error) {
 		columns[i].decimals = data[pos]
 		pos += 1
 	}
+}
+
+// https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_query_response_text_resultset_row.html
+func (rows *textRows) readRow(dest []driver.Value) error {
+	mc := rows.mc
+
+	if rows.rs.done {
+		return io.EOF
+	}
+
+	data, err := mc.readPacket()
+	if err != nil {
+		return err
+	}
+
+	if data[0] == iEOF && len(data) == 5 {
+		rows.mc.status = readStatus(data[3:])
+		rows.rs.done = true
+		if !rows.HasNextResultSet() {
+			rows.mc = nil
+		}
+		return io.EOF
+	}
+	if data[0] == iERR {
+		rows.mc = nil
+		return mc.handleErrorPacket(data)
+	}
+
+	var (
+		n      int
+		isNull bool
+		pos    int = 0
+	)
+
+	for i := range dest {
+
+		var buf []byte
+		buf, isNull, n, err = readLengthEncodedString(data[pos:])
+		pos += n
+		if err != nil {
+			return err
+		}
+
+		if isNull {
+			dest[i] = nil
+			continue
+		}
+
+		switch rows.rs.columns[i].fieldType {
+		default:
+			dest[i] = buf
+		}
+
+	}
+	return nil
+}
+
+// https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_basic_err_packet.html
+func (mc *mysqlConn) handleErrorPacket(data []byte) error {
+	if data[0] != iERR {
+		return errors.New("malformed packet")
+	}
+	errno := binary.LittleEndian.Uint16(data[1:3])
+	me := &MySQLError{
+		Number: errno,
+	}
+	pos := 3
+	if data[3] == 0x23 {
+		copy(me.SQLState[:], data[4:4+5])
+		pos = 9
+	}
+	me.Message = string(data[pos:])
+	return me
 }

@@ -22,13 +22,13 @@ func main() {
 		panic(err.Error())
 	}
 	defer rows.Close()
-	// for rows.Next() {
-	// 	var database string
-	// 	if err := rows.Scan(&database); err != nil {
-	// 		panic(err.Error())
-	// 	}
-	// 	fmt.Println("mysqldriver:", database)
-	// }
+	for rows.Next() {
+		var database string
+		if err := rows.Scan(&database); err != nil {
+			panic(err.Error())
+		}
+		fmt.Println("mysqldriver:", database)
+	}
 
 	// using driver: mysql
 

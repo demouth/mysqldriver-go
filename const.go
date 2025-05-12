@@ -22,6 +22,7 @@ const (
 	iOK           byte = 0x00
 	iAuthMoreData byte = 0x01
 	iEOF          byte = 0xfe
+	iERR          byte = 0xff
 )
 
 // https://dev.mysql.com/doc/internals/en/capability-flags.html#packet-Protocol::CapabilityFlags
@@ -87,6 +88,24 @@ const (
 )
 
 type statusFlag uint16
+
+const (
+	statusInTrans statusFlag = 1 << iota
+	statusInAutocommit
+	statusReserved // Not in documentation
+	statusMoreResultsExists
+	statusNoGoodIndexUsed
+	statusNoIndexUsed
+	statusCursorExists
+	statusLastRowSent
+	statusDbDropped
+	statusNoBackslashEscapes
+	statusMetadataChanged
+	statusQueryWasSlow
+	statusPsOutParams
+	statusInTransReadonly
+	statusSessionStateChanged
+)
 
 const (
 	cachingSha2PasswordRequestPublicKey          = 2

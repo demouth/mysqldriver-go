@@ -5,6 +5,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"net"
+	"sync/atomic"
 )
 
 type mysqlConn struct {
@@ -22,6 +23,8 @@ type mysqlConn struct {
 	watcher  chan<- context.Context
 	closech  chan struct{}
 	finished chan<- struct{}
+	canceled atomicError
+	closed   atomic.Bool
 }
 
 func (mc *mysqlConn) writeWithTimeout(b []byte) (int, error) {
@@ -42,9 +45,14 @@ func (mc *mysqlConn) Close() (err error) {
 
 func (mc *mysqlConn) close() {
 	// TODO: implement close
+	mc.cleanup()
 }
 
 func (mc *mysqlConn) cleanup() {
+	if mc.closed.Swap(true) {
+		return
+	}
+
 	conn := mc.rawConn
 	if conn == nil {
 		return
@@ -52,6 +60,16 @@ func (mc *mysqlConn) cleanup() {
 	if err := conn.Close(); err != nil {
 		// TODO: handle error
 	}
+}
+
+func (mc *mysqlConn) error() error {
+	if mc.closed.Load() {
+		if err := mc.canceled.Value(); err != nil {
+			return err
+		}
+		return errors.New("invalid connection")
+	}
+	return nil
 }
 
 func (mc *mysqlConn) watchCancel(ctx context.Context) error {
@@ -111,6 +129,7 @@ func (mc *mysqlConn) finish() {
 }
 
 func (mc *mysqlConn) cancel(err error) {
+	mc.canceled.Set(err)
 	mc.cleanup()
 }
 
