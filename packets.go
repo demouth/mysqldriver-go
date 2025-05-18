@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql/driver"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -337,6 +338,21 @@ func (mc *mysqlConn) writeCommandPacketStr(command byte, arg string) error {
 	return err
 }
 
+func (mc *mysqlConn) writeCommandPacketUint32(command byte, arg uint32) error {
+	mc.resetSequence()
+
+	data, err := mc.buf.takeSmallBuffer(4 + 1 + 4)
+	if err != nil {
+		return err
+	}
+
+	data[4] = command
+
+	binary.LittleEndian.PutUint32(data[5:], arg)
+
+	return mc.writePacket(data)
+}
+
 // https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_query_response_text_resultset_column_definition.html#sect_protocol_com_query_response_text_resultset_column_definition_41
 func (mc *mysqlConn) readColumns(count int) ([]mysqlField, error) {
 	columns := make([]mysqlField, count)
@@ -475,6 +491,108 @@ func (rows *textRows) readRow(dest []driver.Value) error {
 	return nil
 }
 
+// https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_binary_resultset.html#sect_protocol_binary_resultset_row
+func (rows *binaryRows) readRow(dest []driver.Value) error {
+	data, err := rows.mc.readPacket()
+	if err != nil {
+		return err
+	}
+
+	if data[0] != iOK {
+		if data[0] == iEOF && len(data) == 5 {
+			rows.mc.status = readStatus(data[3:])
+			rows.rs.done = true
+			if !rows.HasNextResultSet() {
+				rows.mc = nil
+			}
+			return io.EOF
+		}
+		mc := rows.mc
+		rows.mc = nil
+		return mc.handleErrorPacket(data)
+	}
+
+	pos := 1 + (len(dest)+7+2)>>3
+	nullMask := data[1:pos]
+
+	for i := range dest {
+		// check if the value is NULL
+		if ((nullMask[(i+2)>>3] >> uint((i+2)&7)) & 1) == 1 {
+			dest[i] = nil
+			continue
+		}
+
+		switch rows.rs.columns[i].fieldType {
+		// Numeric Types
+		case fieldTypeTiny:
+			if rows.rs.columns[i].flags&flagUnsigned != 0 {
+				dest[i] = int64(data[pos])
+			} else {
+				dest[i] = uint64(int8(data[pos]))
+			}
+			pos++
+			continue
+		case fieldTypeShort, fieldTypeYear:
+			if rows.rs.columns[i].flags&flagUnsigned != 0 {
+				dest[i] = int64(binary.LittleEndian.Uint16(data[pos : pos+2]))
+			} else {
+				dest[i] = uint64(int16(binary.LittleEndian.Uint16(data[pos : pos+2])))
+			}
+			pos += 2
+			continue
+		case fieldTypeInt24, fieldTypeLong:
+			if rows.rs.columns[i].flags&flagUnsigned != 0 {
+				dest[i] = int64(binary.LittleEndian.Uint32(data[pos : pos+4]))
+			} else {
+				dest[i] = int64(int32(binary.LittleEndian.Uint32(data[pos : pos+4])))
+			}
+			pos += 4
+			continue
+		// Length coded Binary Strings
+		case fieldTypeDecimal, fieldTypeNewDecimal, fieldTypeVarChar,
+			fieldTypeBit, fieldTypeEnum, fieldTypeSet, fieldTypeTinyBLOB,
+			fieldTypeMediumBLOB, fieldTypeLongBLOB, fieldTypeBLOB,
+			fieldTypeVarString, fieldTypeString, fieldTypeGeometry, fieldTypeJSON,
+			fieldTypeVector:
+			var isNull bool
+			var n int
+			dest[i], isNull, n, err = readLengthEncodedString(data[pos:])
+			pos += n
+			if err == nil {
+				if !isNull {
+					continue
+				} else {
+					dest[i] = nil
+					continue
+				}
+			}
+			return err
+		default:
+			return fmt.Errorf("unsupported field type: %d", rows.rs.columns[i].fieldType)
+		}
+	}
+	return nil
+}
+
+func (mc *mysqlConn) readUntilEOF() error {
+	for {
+		data, err := mc.readPacket()
+		if err != nil {
+			return err
+		}
+
+		switch data[0] {
+		case iERR:
+			return mc.handleErrorPacket(data)
+		case iEOF:
+			if len(data) == 5 {
+				mc.status = readStatus(data[3:])
+			}
+			return nil
+		}
+	}
+}
+
 // https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_basic_err_packet.html
 func (mc *mysqlConn) handleErrorPacket(data []byte) error {
 	if data[0] != iERR {
@@ -491,4 +609,188 @@ func (mc *mysqlConn) handleErrorPacket(data []byte) error {
 	}
 	me.Message = string(data[pos:])
 	return me
+}
+
+// Prepared Statements
+
+func (stmt *mysqlStmt) readPrepareResultPacket() (uint16, error) {
+	data, err := stmt.mc.readPacket()
+	if err == nil {
+		// status [1 byte]
+		if data[0] != iOK {
+			return 0, stmt.mc.handleErrorPacket(data)
+		}
+		// statement_id [4 bytes]
+		stmt.id = binary.LittleEndian.Uint32(data[1:5])
+
+		// num_columns [2 bytes]
+		columnCount := binary.LittleEndian.Uint16(data[5:7])
+
+		// num_params [2 bytes]
+		stmt.paramCount = int(binary.LittleEndian.Uint16(data[7:9]))
+
+		return columnCount, nil
+	}
+	return 0, err
+}
+
+// https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_stmt_execute.html
+func (stmt *mysqlStmt) writeExecutePacket(args []driver.Value) error {
+	if len(args) != stmt.paramCount {
+		return fmt.Errorf(
+			"argument count mismatch (got: %d; has: %d)",
+			len(args),
+			stmt.paramCount,
+		)
+	}
+
+	const minPkLen = 4 + 1 + 4 + 1 + 4
+	mc := stmt.mc
+
+	longDataSize := mc.maxAllowedPacket / (stmt.paramCount + 1)
+	if longDataSize < 64 {
+		longDataSize = 64
+	}
+
+	mc.resetSequence()
+
+	var data []byte
+	var err error
+
+	if len(args) == 0 {
+		data, err = mc.buf.takeBuffer(minPkLen)
+	} else {
+		data, err = mc.buf.takeCompleteBuffer()
+	}
+
+	if err != nil {
+		return err
+	}
+
+	// status [1 byte]
+	data[4] = comStmtExecute
+
+	// statement_id [4 bytes]
+	binary.LittleEndian.PutUint32(data[5:], stmt.id)
+
+	// flags CURSOR_TYPE_NO_CURSOR [1 byte]
+	data[9] = 0x00
+
+	// iteration_count [4 bytes]
+	binary.LittleEndian.PutUint32(data[10:], 1)
+
+	if len(args) > 0 {
+		pos := minPkLen
+		var nullMask []byte
+		if maskLen, typesLen := (len(args)+7)/8, 1+2*len(args); pos+maskLen+typesLen >= cap(data) {
+			tmp := make([]byte, pos+maskLen+typesLen)
+			copy(tmp[:pos], data[:pos])
+			data = tmp
+			nullMask = data[pos : pos+maskLen]
+			pos += maskLen
+		} else {
+			nullMask = data[pos : pos+maskLen]
+			for i := range nullMask {
+				nullMask[i] = 0
+			}
+			pos += maskLen
+		}
+
+		// new_params_bind_flag [1 byte]
+		data[pos] = 0x01
+		pos++
+
+		// parameter type [len(args)*2 bytes]
+		paramTypes := data[pos:]
+		pos += len(args) * 2
+
+		// paramter values [n bytes]
+		// NOTE: https://go.dev/play/p/6i4gmo8TkWf
+		paramValues := data[pos:pos]
+		valuesCap := cap(paramValues)
+
+		for i, arg := range args {
+			if arg == nil {
+				nullMask[i/8] |= 1 << (uint(i) & 7)
+				paramTypes[i+1] = byte(fieldTypeNULL)
+				paramTypes[i+i+1] = 0x00
+				continue
+			}
+
+			if v, ok := arg.(json.RawMessage); ok {
+				arg = []byte(v)
+			}
+
+			switch v := arg.(type) {
+			case string:
+				paramTypes[i+i] = byte(fieldTypeString)
+				paramTypes[i+i+1] = 0x00
+				if len(v) < longDataSize {
+					paramValues = appendLengthEncodedInteger(paramValues, uint64(len(v)))
+					paramValues = append(paramValues, v...)
+				} else {
+					if err := stmt.writeCommandLongData(i, []byte(v)); err != nil {
+						return err
+					}
+				}
+			default:
+				return fmt.Errorf("cannot convert type: %T", arg)
+			}
+		}
+
+		if valuesCap != cap(paramValues) {
+			data = append(data[:pos], paramValues...)
+			mc.buf.store(data)
+		}
+
+		pos += len(paramValues)
+		data = data[:pos]
+	}
+
+	err = mc.writePacket(data)
+	mc.syncSequence()
+	return err
+}
+
+// https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_stmt_send_long_data.html
+func (stmt *mysqlStmt) writeCommandLongData(paramID int, arg []byte) error {
+	maxLen := stmt.mc.maxAllowedPacket - 1
+	pktLen := maxLen
+
+	// 4 bytes for the packet header
+	// 1 byte for the command
+	// 4 bytes for the statement ID
+	// 2 bytes for the parameter ID
+	const dataOffset = 1 + 4 + 2
+
+	data := make([]byte, 4+dataOffset+len(arg))
+
+	copy(data[4+dataOffset:], arg)
+
+	for argLen := len(arg); argLen > 0; argLen -= pktLen - dataOffset {
+		if dataOffset+argLen < maxLen {
+			pktLen = dataOffset + argLen
+		}
+
+		stmt.mc.resetSequence()
+
+		// 1 byte for the command
+		data[4] = comStmtSendLongData
+
+		// 4 bytes for the statement ID
+		binary.LittleEndian.PutUint32(data[5:], stmt.id)
+
+		// 2 bytes for the parameter ID
+		binary.LittleEndian.PutUint16(data[9:], uint16(paramID))
+
+		err := stmt.mc.writePacket(data[:4+pktLen])
+		if err != nil {
+			data = data[pktLen-dataOffset:]
+			continue
+		}
+		return err
+	}
+
+	stmt.mc.resetSequence()
+	return nil
 }

@@ -17,7 +17,9 @@ func main() {
 	}
 	defer db2.Close()
 	fmt.Println("mysqldriver: Ping", db2.Ping())
-	rows, err := db2.Query("SHOW DATABASES")
+	var rows *sql.Rows
+	rows, err = db2.Query("SHOW DATABASES WHERE `Database` LIKE ?", `%schema`)
+	// rows, err = db2.Query("SHOW DATABASES")
 	if err != nil {
 		panic(err.Error())
 	}
@@ -39,7 +41,7 @@ func main() {
 	defer db.Close()
 
 	fmt.Println("mysql: Ping", db.Ping())
-	rows, err = db.Query("SHOW DATABASES")
+	rows, err = db.Query("SHOW DATABASES WHERE `Database` LIKE ?", `%schema`)
 	if err != nil {
 		panic(err.Error())
 	}

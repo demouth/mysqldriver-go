@@ -3,6 +3,7 @@ package mysqldriver
 import (
 	"database/sql/driver"
 	"encoding/binary"
+	"errors"
 	"io"
 	"sync/atomic"
 )
@@ -81,7 +82,13 @@ func readBool(input string) (value bool, valid bool) {
 
 func namedValueToValue(named []driver.NamedValue) ([]driver.Value, error) {
 	dargs := make([]driver.Value, len(named))
-	// TODO: handle named values
+	for n, param := range named {
+		if len(param.Name) > 0 {
+			// TODO: support the use of Named Parameters #561
+			return nil, errors.New("mysql: driver does not support the use of Named Parameters")
+		}
+		dargs[n] = param.Value
+	}
 	return dargs, nil
 }
 func readLengthEncodedString(b []byte) ([]byte, bool, int, error) {

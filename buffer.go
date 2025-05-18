@@ -91,3 +91,15 @@ func (b *buffer) takeSmallBuffer(length int) ([]byte, error) {
 	}
 	return b.cachedBuf[:length], nil
 }
+func (b *buffer) takeCompleteBuffer() ([]byte, error) {
+	if b.busy() {
+		return nil, errors.New("busy buffer")
+	}
+	return b.cachedBuf, nil
+}
+
+func (b *buffer) store(buf []byte) {
+	if cap(buf) <= maxCachedBufSize && cap(buf) > cap(b.cachedBuf) {
+		b.cachedBuf = buf[:cap(buf)]
+	}
+}

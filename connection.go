@@ -33,9 +33,34 @@ func (mc *mysqlConn) writeWithTimeout(b []byte) (int, error) {
 func (mc *mysqlConn) readWithTimeout(b []byte) (int, error) {
 	return mc.netConn.Read(b)
 }
+
 func (mc *mysqlConn) Prepare(query string) (driver.Stmt, error) {
-	return nil, nil
+	if mc.closed.Load() {
+		return nil, driver.ErrBadConn
+	}
+	err := mc.writeCommandPacketStr(comStmtPrepare, query)
+	if err != nil {
+		return nil, driver.ErrBadConn
+	}
+
+	stmt := &mysqlStmt{
+		mc: mc,
+	}
+
+	columnCount, err := stmt.readPrepareResultPacket()
+	if err == nil {
+		if stmt.paramCount > 0 {
+			if err = mc.readUntilEOF(); err != nil {
+				return nil, err
+			}
+			if columnCount > 0 {
+				err = mc.readUntilEOF()
+			}
+		}
+	}
+	return stmt, err
 }
+
 func (mc *mysqlConn) Begin() (driver.Tx, error) {
 	return nil, nil
 }
@@ -117,6 +142,11 @@ func (mc *mysqlConn) startWatcher() {
 	}()
 }
 
+func (mc *mysqlConn) CheckNamedValue(nv *driver.NamedValue) (err error) {
+	nv.Value, err = converter{}.ConvertValue(nv.Value)
+	return
+}
+
 func (mc *mysqlConn) finish() {
 	if !mc.watching || mc.finished == nil {
 		return
@@ -178,6 +208,16 @@ func (mc *mysqlConn) QueryContext(ctx context.Context, query string, args []driv
 func (mc *mysqlConn) query(query string, args []driver.Value) (*textRows, error) {
 	handleOk := mc.clearResult()
 
+	if mc.closed.Load() {
+		return nil, driver.ErrBadConn
+	}
+
+	if len(args) != 0 {
+		if !mc.cfg.InterpolateParams {
+			return nil, driver.ErrSkip
+		}
+	}
+
 	// send command
 	err := mc.writeCommandPacketStr(comQuery, query)
 	if err != nil {
@@ -205,4 +245,41 @@ func (mc *mysqlConn) query(query string, args []driver.Value) (*textRows, error)
 func (mc *mysqlConn) syncSequence() {
 	// TODO: implement
 	// sync sequence number if compression is enabled
+}
+
+func (mc *mysqlConn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
+	if err := mc.watchCancel(ctx); err != nil {
+		return nil, err
+	}
+	stmt, err := mc.Prepare(query)
+	mc.finish()
+
+	if err != nil {
+		return nil, err
+	}
+
+	select {
+	default:
+	case <-ctx.Done():
+		stmt.Close()
+		return nil, ctx.Err()
+	}
+	return stmt, nil
+}
+
+func (stmt *mysqlStmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
+	dargs, err := namedValueToValue(args)
+	if err != nil {
+		return nil, err
+	}
+	if err := stmt.mc.watchCancel(ctx); err != nil {
+		return nil, err
+	}
+	rows, err := stmt.query(dargs)
+	if err != nil {
+		stmt.mc.finish()
+		return nil, err
+	}
+	rows.finish = stmt.mc.finish
+	return rows, err
 }

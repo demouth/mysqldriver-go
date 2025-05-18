@@ -115,4 +115,59 @@ const (
 
 type fieldType byte
 
+const (
+	fieldTypeDecimal fieldType = iota
+	fieldTypeTiny
+	fieldTypeShort
+	fieldTypeLong
+	fieldTypeFloat
+	fieldTypeDouble
+	fieldTypeNULL
+	fieldTypeTimestamp
+	fieldTypeLongLong
+	fieldTypeInt24
+	fieldTypeDate
+	fieldTypeTime
+	fieldTypeDateTime
+	fieldTypeYear
+	fieldTypeNewDate
+	fieldTypeVarChar
+	fieldTypeBit
+)
+const (
+	fieldTypeVector fieldType = iota + 0xf2
+	fieldTypeInvalid
+	fieldTypeBool
+	fieldTypeJSON
+	fieldTypeNewDecimal
+	fieldTypeEnum
+	fieldTypeSet
+	fieldTypeTinyBLOB
+	fieldTypeMediumBLOB
+	fieldTypeLongBLOB
+	fieldTypeBLOB
+	fieldTypeVarString
+	fieldTypeString
+	fieldTypeGeometry
+)
+
 type fieldFlag uint16
+
+const (
+	flagNotNULL fieldFlag = 1 << iota
+	flagPriKey
+	flagUniqueKey
+	flagMultipleKey
+	flagBLOB
+	flagUnsigned
+	flagZeroFill
+	flagBinary
+	flagEnum
+	flagAutoIncrement
+	flagTimestamp
+	flagSet
+	flagUnknown1
+	flagUnknown2
+	flagUnknown3
+	flagUnknown4
+)

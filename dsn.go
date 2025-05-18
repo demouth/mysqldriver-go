@@ -18,7 +18,8 @@ type Config struct {
 	Loc              *time.Location
 	MaxAllowedPacket int
 
-	ParseTime bool
+	InterpolateParams bool
+	ParseTime         bool
 
 	pubKey   *rsa.PublicKey
 	charsets []string
