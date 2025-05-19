@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	// test1()
+	test1()
 	test2()
 }
 
