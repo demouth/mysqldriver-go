@@ -9,6 +9,12 @@ import (
 )
 
 func main() {
+	// test1()
+	test2()
+}
+
+func test1() {
+
 	// using driver: mysqldriver
 
 	db2, err := sql.Open("mysqldriver", "user:password@tcp(localhost:9910)/test?charset=utf8&parseTime=True&loc=Local")
@@ -53,4 +59,54 @@ func main() {
 		}
 		fmt.Println("mysql:", database)
 	}
+}
+
+func test2() {
+
+	// using driver: mysqldriver
+
+	db, err := sql.Open("mysqldriver", "user:password@tcp(localhost:9910)/test?charset=utf8&parseTime=True&loc=Local")
+	if err != nil {
+		panic(err.Error())
+	}
+	defer db.Close()
+
+	res, err := db.Exec("DROP TABLE IF EXISTS users;")
+	if err != nil {
+		panic(err.Error())
+	}
+	fmt.Println("res:", res)
+
+	res, err = db.Exec(`CREATE TABLE users (
+			id INT NOT NULL AUTO_INCREMENT,
+			name VARCHAR(255) NOT NULL,
+			PRIMARY KEY (id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8;`)
+	if err != nil {
+		panic(err.Error())
+	}
+	fmt.Println("res:", res)
+
+	// using driver: mysql
+	db2, err := sql.Open("mysql", "user:password@tcp(localhost:9910)/test?charset=utf8&parseTime=True&loc=Local")
+	if err != nil {
+		panic(err.Error())
+	}
+	defer db2.Close()
+
+	res, err = db2.Exec("DROP TABLE IF EXISTS users;")
+	if err != nil {
+		panic(err.Error())
+	}
+	fmt.Println("res:", res)
+
+	res, err = db2.Exec(`CREATE TABLE users (
+			id INT NOT NULL AUTO_INCREMENT,
+			name VARCHAR(255) NOT NULL,
+			PRIMARY KEY (id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8;`)
+	if err != nil {
+		panic(err.Error())
+	}
+	fmt.Println("res:", res)
 }

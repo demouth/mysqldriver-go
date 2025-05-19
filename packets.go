@@ -304,6 +304,26 @@ func (mc *okHandler) handleOkPacket(data []byte) error {
 	return nil
 }
 
+func (mc *okHandler) discardResults() error {
+	for mc.status&statusMoreResultsExists != 0 {
+		resLen, err := mc.readResultSetHeaderPacket()
+		if err != nil {
+			return err
+		}
+		if resLen > 0 {
+			// columns
+			if err := mc.conn().readUntilEOF(); err != nil {
+				return err
+			}
+			// rows
+			if err := mc.conn().readUntilEOF(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func readStatus(b []byte) statusFlag {
 	return statusFlag(b[0]) | statusFlag(b[1])<<8
 }

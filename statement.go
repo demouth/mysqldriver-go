@@ -23,10 +23,40 @@ func (stmt *mysqlStmt) NumInput() int {
 	return stmt.paramCount
 }
 func (stmt *mysqlStmt) Exec(args []driver.Value) (driver.Result, error) {
+	if stmt.mc.closed.Load() {
+		return nil, driver.ErrBadConn
+	}
 
-	// TODO: implement
+	err := stmt.writeExecutePacket(args)
+	if err != nil {
+		return nil, stmt.mc.markBadConn(err)
+	}
 
-	return nil, nil
+	mc := stmt.mc
+	handleOk := stmt.mc.clearResult()
+
+	resLen, err := handleOk.readResultSetHeaderPacket()
+	if err != nil {
+		return nil, err
+	}
+
+	if resLen > 0 {
+		// columns
+		if err := mc.readUntilEOF(); err != nil {
+			return nil, err
+		}
+		// rows
+		if err := mc.readUntilEOF(); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := handleOk.discardResults(); err != nil {
+		return nil, err
+	}
+
+	copied := mc.result
+	return &copied, nil
 }
 
 func (stmt *mysqlStmt) Query(args []driver.Value) (driver.Rows, error) {

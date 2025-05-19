@@ -61,6 +61,61 @@ func (mc *mysqlConn) Prepare(query string) (driver.Stmt, error) {
 	return stmt, err
 }
 
+func (mc *mysqlConn) Exec(query string, args []driver.Value) (driver.Result, error) {
+	if mc.closed.Load() {
+		return nil, driver.ErrBadConn
+	}
+	if len(args) != 0 {
+		if !mc.cfg.InterpolateParams {
+			return nil, driver.ErrSkip
+		}
+		// TODO: implement interpolateParams
+	}
+
+	err := mc.exec(query)
+	if err == nil {
+		copied := mc.result
+		return &copied, err
+	}
+	return nil, mc.markBadConn(err)
+}
+
+func (mc *mysqlConn) exec(query string) error {
+	handleOk := mc.clearResult()
+	if err := mc.writeCommandPacketStr(comQuery, query); err != nil {
+		return mc.markBadConn(err)
+	}
+
+	resLen, err := handleOk.readResultSetHeaderPacket()
+	if err != nil {
+		return err
+	}
+	if resLen > 0 {
+		// columns
+		if err := mc.readUntilEOF(); err != nil {
+			return err
+		}
+		// rows
+		if err := mc.readUntilEOF(); err != nil {
+			return err
+		}
+	}
+	return handleOk.discardResults()
+}
+
+func (mc *mysqlConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	dargs, err := namedValueToValue(args)
+	if err != nil {
+		return nil, err
+	}
+	if err := mc.watchCancel(ctx); err != nil {
+		return nil, err
+	}
+	defer mc.finish()
+
+	return mc.Exec(query, dargs)
+}
+
 func (mc *mysqlConn) Begin() (driver.Tx, error) {
 	return nil, nil
 }
